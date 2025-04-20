@@ -37,4 +37,4 @@ Go to the Confluent landing page by clicking on the Confluent icon on the top le
   3, "The old that is strong does not wither"
   4, "Deep roots are not harmed by the frost"
 - The four messages will be distributed amongst the six partitions of the topic
-- ![First Topic](Confluent-Developer-Courses/assets/images/1.png)
+- ![First Topic](assets/images/1.png)
