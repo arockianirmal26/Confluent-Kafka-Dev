@@ -1,7 +1,8 @@
 # Getting started
 
 Here I documented the practical things that I have done in the below course
-[Apache Kafka® 101](https://developer.confluent.io/courses/apache-kafka/events/)
+
+- [Apache Kafka® 101](https://developer.confluent.io/courses/apache-kafka/events/)
 
 # Set up Confluent Cloud
 
