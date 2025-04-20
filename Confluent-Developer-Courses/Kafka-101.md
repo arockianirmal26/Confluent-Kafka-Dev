@@ -33,8 +33,9 @@ Go to the Confluent landing page by clicking on the Confluent icon on the top le
 - In the next screen, which displays your topic, select the Messages tab to view the contents of the topic (which is empty at this point). Select Produce a new message (Under 'Actions' on the top right corner): This will open a UI that lets you enter a key and value for a new message (remember that a message, or an event, is a key/value pair)
 - Delete the existing data in the key and value fields, and enter "1” for the key. For the value, enter a line from a poem that may sound familiar, such as, "All that is gold does not glitter." Then Click on 'Produce'
 - In a similar fashion, add the next few lines of the poem
-  2, "Not all who wander are lost"
-  3, "The old that is strong does not wither"
-  4, "Deep roots are not harmed by the frost"
+  - 2, "Not all who wander are lost"
+  - 3, "The old that is strong does not wither"
+  - 4, "Deep roots are not harmed by the frost"
 - The four messages will be distributed amongst the six partitions of the topic
+
 - ![First Topic](assets/images/1.png)
