@@ -51,3 +51,30 @@ Go to the Confluent landing page by clicking on the Confluent icon on the top le
 ```bash
 curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
 ```
+
+In the macos I got permission issues like 'Operation not permitted/Permission denied' So I installed like below
+
+```bash
+sudo curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b $HOME/.local/bin
+```
+
+The above command downloads the Confluent CLI installer script (curl) and nstalls it into a folder you can write to: ~/.local/bin. This avoids permission issues that happen with protected system folders like /usr/local/bin. The -b option tells the installer where to put the confluent command
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The above adds that folder to your terminal's PATH so that your shell can find and run confluent from anywhere
+
+```bash
+source ~/.zshrc
+```
+
+Reloads your shell config so the PATH change takes effect immediately (no need to restart Terminal)
+
+- You'll receive the latest version (check it), but note that it is a good idea once in a while to update the CLI with the following
+
+```bash
+confluent --version
+confluent update
+```
