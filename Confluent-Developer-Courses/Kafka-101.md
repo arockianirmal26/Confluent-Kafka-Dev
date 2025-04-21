@@ -78,3 +78,47 @@ Reloads your shell config so the PATH change takes effect immediately (no need t
 confluent --version
 confluent update
 ```
+
+- From a terminal, log in to Confluent Cloud with the credentials that you used to create your Confluent Cloud account. (The --save flag saves your login details locally so that you don’t have to reenter your credentials so frequently.)
+
+```bash
+confluent login --save
+```
+
+- Next, determine your Confluent environment by running
+
+```bash
+confluent environment list
+```
+
+If your account is new, you should expect to only see one environment. Observe the output from this command, particularly the ID field. Using ID value from the previous step, run:
+
+```bash
+confluent environment use {ID}
+```
+
+- Similarly, list out all of the Kafka clusters available to you using the following
+
+```bash
+confluent kafka cluster list
+```
+
+Again, observe the ID that’s output. Then set the Kafka cluster by running:
+
+```bash
+confluent kafka cluster use {ID}
+```
+
+- In order to communicate with our Kafka cluster, we need to provide an API key and secret for the CLI to use. Using the cluster ID from earlier step, run:
+
+```bash
+confluent api-key create --resource {ID}
+```
+
+This command will output an API key and secret; save these securely somewhere. To tell the CLI to use the API key, gather the cluster ID along with the API key and execute:
+
+```bash
+confluent api-key use {API Key} --resource {ID}
+```
+
+Now your CLI is set up and ready to use!
