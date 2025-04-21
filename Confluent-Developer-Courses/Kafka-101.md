@@ -70,7 +70,25 @@ The above adds that folder to your terminal's PATH so that your shell can find a
 source ~/.zshrc
 ```
 
-Reloads your shell config so the PATH change takes effect immediately (no need to restart Terminal)
+Reloads your shell config so the PATH change takes effect immediately (no need to restart Terminal). The above will apply the path change only to your current session. You’ll need to make the PATH change persistent by adding it to your ~/.zshrc file properly
+
+Open your shell config file
+
+```bash
+nano ~/.zshrc
+```
+
+Add this line at the bottom and Save and exit nano (Control + X / Press Y to confirm / Press Enter to save)
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Reload your config
+
+```bash
+source ~/.zshrc
+```
 
 - You'll receive the latest version (check it), but note that it is a good idea once in a while to update the CLI with the following
 
@@ -122,3 +140,34 @@ confluent api-key use {API Key} --resource {ID}
 ```
 
 Now your CLI is set up and ready to use!
+
+# Produce and Consume Using the Confluent CLI
+
+- From a terminal window, list out all of the topics available to you. You should see the poems topics that we created earlier
+
+```bash
+confluent kafka topic list
+```
+
+- Consume messages from the poems topic. The --from-beginning flag tells the consumer to start from the earliest known offset on the topic, i.e., the earliest message. Leave this consumer running in the terminal window
+
+```bash
+confluent kafka topic consume --from-beginning poems
+```
+
+- From another terminal window, begin to produce more messages to the topic. Execute the produce command with the --parse-key flag to automatically read both keys and values separated by the “:” symbol
+
+```bash
+confluent kafka topic produce poems --parse-key
+```
+
+When prompted, enter the following strings as written:
+
+```
+	5:"From the ashes a fire shall awaken"
+	6:"A light from the shadows shall spring"
+	7:"Renewed shall be blad that was broken"
+	8:"The crownless again shall be king"
+```
+
+- Observe the messages as they’re being output in the consumer terminal window. Navigate to Confluent Cloud. From the poems topic overview page, select the Messages tab and observe where the new messages have been written
