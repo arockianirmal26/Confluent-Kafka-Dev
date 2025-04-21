@@ -39,3 +39,15 @@ Go to the Confluent landing page by clicking on the Confluent icon on the top le
 - The four messages will be distributed amongst the six partitions of the topic
 
 ![First Topic](assets/images/1.png)
+
+# Set Up the Confluent CLI
+
+Go to the Confluent landing page by clicking on the Confluent icon on the top left corner. Then navigate to the 'Environments' - 'default' and select the cluster you created under 'Live'
+
+- select **CLI and tools** from the lower left-hand corner of the screen. From here, you’ll find instructions on how to download and update the command line tools that we’ll be using.
+
+- Paste the curl command into a terminal to install the CLI.
+
+```bash
+curl -L --http1.1 https://cnfl.io/cli | sh -s -- -b /usr/local/bin
+```
