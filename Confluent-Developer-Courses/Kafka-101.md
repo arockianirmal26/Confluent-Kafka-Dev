@@ -314,3 +314,29 @@ chmod u+x consumer.py
 - Observe the messages being output and stop the consumer script using ctrl+C. This script was deliberately simple, but the steps of configuring your consumer, subscribing to a topic, and polling for events are common across all consumers.
 
 ![Python Consumer](assets/images/2.png)
+
+# Kafka Connect
+
+Sometimes you would like the data from other systems to get into Kafka topics, and sometimes you would like data in Kafka topics to get into those systems. As Apache Kafka's integration API, this is exactly what Kafka Connect does. On the one hand, Kafka Connect is an ecosystem of pluggable connectors, and on the other, a client application. As a client application, Connect is a server process that runs on hardware independent of the Kafka brokers themselves. It is scalable and fault-tolerant, meaning you can run not just one single Connect worker but a cluster of Connect workers that share the load of moving data in and out of Kafka from and to external systems. Kafka Connect also abstracts the business of code away from the user and instead requires only JSON configuration to run.<br/><br/>
+
+A Connect worker runs one or more connectors. A connector is a pluggable component that is responsible for interfacing with the external system. A source connector reads data from an external system and produces it to a Kafka topic. A sink connector subscribes to one or more Kafka topics and writes the messages it reads to an external system. Each connector is either a source or a sink connector, but it is worthwhile to remember that the Kafka cluster only sees a producer or a consumer in either case. Everything that is not a broker is a producer or a consumer<br/><br/>
+
+One of the primary advantages of Kafka Connect is its large ecosystem of connectors. Writing the code that moves data to a cloud blob store, or writes to Elasticsearch, or inserts records into a relational database is code that is unlikely to vary from one business to the next. Likewise, reading from a relational database, Salesforce, or a legacy HDFS filesystem is the same operation no matter what sort of application does it. You can definitely write this code, but spending your time doing that doesn’t add any kind of unique value to your customers or make your business more uniquely competitive<br/><br/>
+
+In the below exercise, we’ll gain experience with Kafka Connect and create a source connector in Confluent Cloud, which will produce data to Apache Kafka. Then, we’ll consume this data from the command line.
+
+- Go to the Confluent landing page by clicking on the Confluent icon on the top left corner. Then navigate to the 'Environments' - 'default' and select the cluster you created under 'Live'
+
+- Select the Connectors tab on the left-hand side of the screen, then in the “Search connectors” search bar, enter “Datagen” to narrow down the available connectors. Select **Sample Data** Datagen Source.
+
+- In the **Launch Sample Data** window, choose 'Additional configuration' from the bottom left corner. Click **Add new topic** and enter 'orders' as Topic name and then click 'Create with defaults'. Once created choose this topic for 'Choose the topics you want to send data to'. In the next 'Create or select an API key' window, choose 'Use an existing API key' and enter the API key and secret we created earlier and click Continue. Select 'JSON' for 'Select output record value format' and 'Orders' for 'Select a schema' and click Continue. Keep the rest as defaults and continue until you launch the connector.
+
+- Once the connector is running, from a terminal window, consume messages from the inventory topic.
+
+```bash
+confluent kafka topic consume --from-beginning orders
+```
+
+![Consuming messages produced by Datagen Source Connector](assets/images/3.png)
+
+- After testing, choose the connector and go to the 'settings' tab and click 'Delete connector' to avoid losing your credits
