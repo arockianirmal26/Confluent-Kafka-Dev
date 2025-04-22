@@ -340,3 +340,32 @@ confluent kafka topic consume --from-beginning orders
 ![Consuming messages produced by Datagen Source Connector](assets/images/3.png)
 
 - After testing, choose the connector and go to the 'settings' tab and click 'Delete connector' to avoid losing your credits
+
+# Confluent Schema Registry
+
+Once applications are busily producing messages to Apache Kafka and consuming messages from it, two things will happen. First, new consumers of existing topics will emerge. These are brand new applications—perhaps written by the team that wrote the original producer of the messages, perhaps by another team—and will need to understand the format of the messages in the topic. Second, the format of those messages will evolve as the business evolves. Order objects gain a new status field, usernames split into first and last name from full name, and so on. The schema of our domain objects is a constantly moving target, and we must have a way of agreeing on the schema of messages in any given topic. **Confluent Schema Registry exists to solve this problem.** <br/><br/>
+
+Schema Registry is a standalone server process that runs on a machine external to the Kafka brokers. Its job is to maintain a database of all of the schemas that have been written into topics in the cluster for which it is responsible. That “database” is persisted in an internal Kafka topic and cached in Schema Registry for low-latency access. Schema Registry can be run in a redundant, high-availability configuration, so it remains up if one instance fails <br/><br/>
+
+Schema Registry is also an API that allows producers and consumers to predict whether the message they are about to produce or consume is compatible with previous versions. When a producer is configured to use Schema Registry, it calls an API at the Schema Registry REST endpoint and presents the schema of the new message. If it is the same as the last message produced, then the produce may succeed. If it is different from the last message but matches the compatibility rules defined for the topic, the produce may still succeed. But if it is different in a way that violates the compatibility rules, the produce will fail in a way that the application code can detect.<br/><br/>
+
+Likewise on the consume side, if a consumer reads a message that has an incompatible schema from the version the consumer code expects, Schema Registry will tell it not to consume the message. Schema Registry doesn’t fully automate the problem of schema evolution—that is a challenge in any system regardless of the tooling—but it does make a difficult problem much easier by preventing runtime failures when possible.
+
+In this hands-on exercise, we'll work through a similar workflow as the previous one, this time seeing how we can write and serialize the data using Avro and leverage Schema Registry to manage our schemas.
+
+- From the Confluent Cloud Console of the cluster we created, select 'Schema Registry' from the lower left-hand corner
+- Under the 'Overview' section, select 'API Keys' and create a key for schema registry
+- Similar to the earlier hands-on execise, create Sample Data (Datagen Source) connector. Choose a existing topic to produce data into or create a new topic. This time choose 'Avro' format. Keep the rest as default values and start the connector
+- With the connector running, navigate to the Schema Registry page to have a look at the Avro schema that has been set for the orders topic. Under Schema Registry - Data Contracts - 'order-value'
+- From there, select the orders-value schema and view its fields
+- From a terminal window, consume messages from the orders topic. If you’re curious, start by using the same consume command as in the previous exercise. You might have noticed that the data is more or less gibberish with a few recognizable strings. Because the data is serialized to the topic using Avro, before we can read it, the consumer needs to deserialize it. What we’re seeing here is Avro data that is read as if it’s just a regular string
+
+```bash
+confluent kafka topic consume --from-beginning orders
+```
+
+![Consuming Avro messages without deserializing](assets/images/4.png)
+
+- To do this the right way, tell the consumer to fetch the Avro schema for this topic from Schema Registry and deserialize the data first. You’ll see the deserialized data being output
+
+![Consuming Avro messages after deserializing](assets/images/5.png)
