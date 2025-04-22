@@ -171,3 +171,49 @@ When prompted, enter the following strings as written:
 ```
 
 - Observe the messages as they’re being output in the consumer terminal window. Navigate to Confluent Cloud. From the poems topic overview page, select the Messages tab and observe where the new messages have been written
+
+# Partitioning
+
+Partitions are useful in allowing you to break up your topic into manageable chunks that can be stored across multiple nodes in your cluster
+
+- From the terminal window, list your available topics. You should see only the poems topic.
+
+```bash
+confluent kafka topic list
+```
+
+- Describe the topic to see more details into the topic and its configuration values. In particular, make note of the Partition Count value, which is 6
+
+```bash
+confluent kafka topic describe poems
+```
+
+- Create two more topics with 1 and 4 partitions, respectively
+
+```bash
+confluent kafka topic create --partitions 1 poems_1
+confluent kafka topic create --partitions 4 poems_4
+```
+
+- Produce data to the topics using the produce command and --parse-key flag
+
+```bash
+confluent kafka topic produce poems_1 --parse-key
+```
+
+When prompted, enter the following strings as written:
+
+```
+	1:”All that is gold does not glitter”
+	2:"Not all who wander are lost"
+	3:"The old that is strong does not wither"
+	4:"Deep roots are not harmed by the frost"
+	5:"From the ashes a fire shall awaken"
+	6:"A light from the shadows shall spring"
+	7:"Renewed shall be blad that was broken"
+	8:"The crownless again shall be king"
+```
+
+- Repeat the above step for the poems_4 topic
+
+- From the Confluent Cloud Console, view the newly produced messages in both topics. Note that the poems_1 topic has all eight messages in its single partition while the poems_4 topic has a slightly different distribution. This should have given you a good idea of how partitions will affect the distribution of data across your topic.
