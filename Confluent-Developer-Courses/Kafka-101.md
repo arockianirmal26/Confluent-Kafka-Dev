@@ -217,3 +217,100 @@ When prompted, enter the following strings as written:
 - Repeat the above step for the poems_4 topic
 
 - From the Confluent Cloud Console, view the newly produced messages in both topics. Note that the poems_1 topic has all eight messages in its single partition while the poems_4 topic has a slightly different distribution. This should have given you a good idea of how partitions will affect the distribution of data across your topic.
+
+# Consumers
+
+In practice, programmatically producing and consuming messages is an important way to interact with your Apache Kafka cluster and put data into motion. Earlier we gained experience consuming from and producing to a Kafka topic using the command line. With that experience under your belt, let’s explore a more programmatic way of consuming messages by writing a consumer script in Python.
+
+- From a terminal window, activate a new virtual environment and install the confluent-kafka library.
+
+```bash
+pip3 install virtualenv #Install virtualenv if not installed already
+virtualenv env # Create a virtual environment named 'env' to isolate dependencies
+source env/bin/activate # Activate the virtual environment (Linux/macOS syntax)
+pip install confluent-kafka # Install the Confluent Kafka Python client inside the virtual environment
+```
+
+- Determine your cluster endpoint by running the below. The output contains an endpoint field; take note of the hostname and port from this value, for example, pkc-abc12.us-central1.gcp.confluent.cloud:9092
+
+```bash
+confluent kafka cluster describe
+```
+
+- You need an API key and secret in order to proceed. If you have the api key that you created earlier, you can use that. If not you need create a new one. Once you have it, set the key using:
+
+```bash
+confluent api-key use {API Key} --resource {ID}
+```
+
+- Using your favorite text editor, create a configuration file named **config.ini** and populate it with the following, substituting in your endpoint, key and secret values
+
+```ini
+[default]
+bootstrap.servers=< Endpoint >
+security.protocol=SASL_SSL
+sasl.mechanisms=PLAIN
+sasl.username=< API Key >
+sasl.password=< API Secret >
+
+[consumer]
+group.id=python_kafka101_group_1
+# 'auto.offset.reset=earliest' to start reading from the beginning of
+# the topic if no committed offsets exist.
+auto.offset.reset=earliest
+```
+
+- Create another file named **consumer.py** that contains the following:
+
+```python
+#!/usr/bin/env python
+from argparse import ArgumentParser, FileType
+from configparser import ConfigParser
+from confluent_kafka import Consumer
+if __name__ == '__main__':
+    # Parse the command line.
+    parser = ArgumentParser()
+    parser.add_argument('config_file', type=FileType('r'))
+    args = parser.parse_args()
+
+    # Parse the configuration.
+    config_parser = ConfigParser()
+    config_parser.read_file(args.config_file)
+    config = dict(config_parser['default'])
+    config.update(config_parser['consumer'])
+
+    # Create Consumer instance
+    consumer = Consumer(config)
+
+    # Subscribe to topic
+    topic = "poems"
+    consumer.subscribe([topic])
+
+    # Poll for new messages from Kafka and print them.
+    try:
+        while True:
+            msg = consumer.poll(1.0)
+            if msg is None:
+                print("Waiting...")
+            elif msg.error():
+                print("ERROR: %s".format(msg.error()))
+            else:
+                # Extract the (optional) key and value, and print.
+                print("Consumed event from topic {topic}: key = {key:12} value = {value:12}".format(topic=msg.topic(), key=msg.key().decode('utf-8'), value=msg.value().decode('utf-8')))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Leave group and commit final offsets
+        consumer.close()
+```
+
+- Make the script executable and run:
+
+```bash
+chmod u+x consumer.py
+./consumer.py config.ini
+```
+
+- Observe the messages being output and stop the consumer script using ctrl+C. This script was deliberately simple, but the steps of configuring your consumer, subscribing to a topic, and polling for events are common across all consumers.
+
+![Python Consumer](assets/images/2.png)
