@@ -369,3 +369,92 @@ confluent kafka topic consume --from-beginning orders
 - To do this the right way, tell the consumer to fetch the Avro schema for this topic from Schema Registry and deserialize the data first. You’ll see the deserialized data being output
 
 ![Consuming Avro messages after deserializing](assets/images/5.png)
+
+# KsqlDB
+
+Up until now, we’ve been producing data to and reading data from an Apache Kafka topic without any intermediate steps. With data transformation and aggregation, we can do so much more!<br/><br/>
+
+In the last exercise, we created a Datagen Source Connector to produce a stream of orders data to a Kafka topic, serializing it in Avro using Confluent Schema Registry along the way. This exercise relies on the data that our connector is producing<br/><br/>
+
+Before we start, make sure that your Datagen Source Connector is still up and running.
+
+- From the cluster landing page in the Confluent Cloud Console, select ksqlDB from the left-hand menu. Select 'Create cluster'
+- Choose 'My account' from the “Access Control” page and select continue
+- Keep the default values for the cluster name and cluster size and click 'Launch Cluster'. It takes sometime to provision the ksqlDB cluster
+- Once the cluster is provisioned, add the orders topic from the previous exercise to the ksqlDB application. Register it as a stream by running:
+
+```sql
+CREATE STREAM orders_stream WITH (
+  KAFKA_TOPIC='orders',
+  VALUE_FORMAT='AVRO',
+  PARTITIONS=6,
+  TIMESTAMP='ordertime');
+```
+
+![Order stream](assets/images/6.png)
+
+- When the stream has been created, navigate to the Streams tab and select the orders_stream to view more details about the stream, including fields and their types, how the data is serialized, and information about the underlying topic.
+
+![Order stream properties](assets/images/7.png)
+
+- Click Query stream to be taken directly back to the editor, where the editor will be automatically populated with a query for that stream of data. If your Datagen connector is still running (which it should be), you’ll also see data being output in real time at the bottom of the screen.
+
+![Order stream live data](assets/images/8.png)
+
+- The ordertime field of each message is in milliseconds since epoch, which isn’t very friendly to look at. To transform this field into something more readable, execute the following push query (which will output results as new messages are written to the underlying Kafka topic). This query also extracts the nested data from the address struct:
+
+```sql
+SELECT
+    TIMESTAMPTOSTRING(ORDERTIME, 'yyyy-MM-dd HH:mm:ss.SSS') AS ORDERTIME_FORMATTED,
+    orderid,
+    itemid,
+    orderunits,
+    address->city,
+    address->state,
+    address->zipcode
+from ORDERS_STREAM;
+```
+
+- The results look good, so add a CREATE STREAM line to the beginning of the query to persist the results to a new stream.
+
+```sql
+CREATE STREAM ORDERS_STREAM_TS AS
+SELECT
+    TIMESTAMPTOSTRING(ORDERTIME, 'yyyy-MM-dd HH:mm:ss.SSS') AS ORDERTIME_FORMATTED,
+    orderid,
+    itemid,
+    orderunits,
+    address->city,
+    address->state,
+    address->zipcode
+from ORDERS_STREAM;
+```
+
+- Using data aggregations, you can determine how many orders are made per state. ksqlDB also makes it easy to window data so that you can easily determine how many orders are made per state per week. Run the following ksqlDB statement to create a table:
+
+```sql
+CREATE TABLE STATE_COUNTS AS
+SELECT
+  address->state,
+  COUNT_DISTINCT(ORDERID) AS DISTINCT_ORDERS
+FROM ORDERS_STREAM
+WINDOW TUMBLING (SIZE 7 DAYS)
+GROUP BY address->state;
+```
+
+- When the table has been created, navigate to the Tables tab above to see data related to the table. Click Query table to be taken back to the ksqlDB editor and start an open-ended query that will provide an output for each update to the table; as new orders are made, you’ll see an ever-increasing number of orders per state per defined window period.
+
+- In order to just see the latest values from a table—rather than an open-ended query—we can execute a pull query. We can see a current snapshot containing the states that had over two orders per one-week period by running the following:
+
+```sql
+SELECT
+    *
+FROM STATE_COUNTS
+WHERE DISTINCT_ORDERS > 2;
+```
+
+We've only scratched the surface of what you can do with ksqlDB, but we’ve shown you how to create streams and tables as well as how to transform and aggregate your data. With these tools in your toolbelt, you’ll be able to hit the ground running with your next ksqlDB application. <br/><br/>
+
+# Important Note
+
+A final note to you as we wrap up the exercises for this course: Don’t forget to delete your resources and cluster in order to avoid exhausting the free Confluent Cloud usage that is provided to you.
