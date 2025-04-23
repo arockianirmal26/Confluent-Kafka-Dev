@@ -254,3 +254,96 @@ A GlobalKTable is built using the **GlobalKTable** method on the **StreamBuilder
 ```
 
 The main difference between a KTable and a GlobalKTable is that a KTable shards data between Kafka Streams instances, while a GlobalKTable extends a full copy of the data to each instance. You typically use a GlobalKTable with lookup data. There are also some idiosyncrasies regarding joins between a GlobalKTable and a KStream;
+
+# Hands On: KTable
+
+- This module’s code can be found in the source file src/main/java/io/confluent/developer/ktable/KTableExample.java.
+
+- Below is the complete code
+
+```java
+package io.confluent.developer.ktable;
+
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.utils.Bytes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.kstream.KTable;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.state.KeyValueStore;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+
+public class KTableExample {
+
+    public static void main(String[] args) throws IOException {
+        final Properties streamsProps = new Properties();
+        try (FileInputStream fis = new FileInputStream("src/main/resources/streams.properties")) {
+            streamsProps.load(fis);
+        }
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "ktable-application");
+
+        StreamsBuilder builder = new StreamsBuilder();
+        final String inputTopic = streamsProps.getProperty("ktable.input.topic");
+        final String outputTopic = streamsProps.getProperty("ktable.output.topic");
+
+        //creating a variable to store the string that we want to filter on
+        final String orderNumberStart = "orderNumber-";
+
+        // Crate a table with the StreamBuilder from above and use the table method
+        // along with the inputTopic create a Materialized instance and name the store
+        // and provide a Serdes for the key and the value  HINT: Materialized.<String, String, KeyValueStore<Bytes, byte[]>>as
+        // then use two methods to specify the key and value serde
+        KTable<String, String> firstKTable = builder.table(inputTopic,
+    Materialized.<String, String, KeyValueStore<Bytes, byte[]>>as("ktable-store")
+                .withKeySerde(Serdes.String())
+                .withValueSerde(Serdes.String()));
+
+        //Add a filter operator for removing records that don't contain the order number variable value
+        firstKTable.filter((key, value) -> value.contains(orderNumberStart))
+                // Map the values by taking a substring
+                .mapValues(value -> value.substring(value.indexOf("-") + 1))
+                // Then filter again by taking out records where the number value of the string is less than or equal to 1000:
+                .filter((key, value) -> Long.parseLong(value) > 1000)
+                // Add a method here to covert the table to a stream
+                .toStream()
+                // Then uncomment the following two lines to view results on the console and write to a topic
+                .peek((key, value) -> System.out.println("Outgoing record - key " +key +" value " + value))
+                .to(outputTopic, Produced.with(Serdes.String(), Serdes.String()));
+
+
+        try (KafkaStreams kafkaStreams = new KafkaStreams(builder.build(), streamsProps)) {
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                kafkaStreams.close(Duration.ofSeconds(2));
+                shutdownLatch.countDown();
+            }));
+            TopicLoader.runProducer();
+            try {
+                kafkaStreams.start();
+                shutdownLatch.await();
+            } catch (Throwable e) {
+                System.exit(1);
+            }
+        }
+        System.exit(0);
+    }
+}
+```
+
+- Now you can run the above with this command
+
+```bash
+./gradlew runStreams -Pargs=ktable
+```
+
+There's a single output result because the sample data for this exercise has the same key.
+
+![Ktable](assets/images/13.png)
