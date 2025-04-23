@@ -347,3 +347,261 @@ public class KTableExample {
 There's a single output result because the sample data for this exercise has the same key.
 
 ![Ktable](assets/images/13.png)
+
+# Serialization
+
+- Serialization is a general term that covers deserializing and serializing.
+- When you push an array of bytes through a deserializer, it gives you an object on the other end
+- A serializer is just the opposite—you give it an object, and it returns an array of bytes
+- Serialization is important for Apache Kafka® because as mentioned above, a Kafka broker only works with bytes. Kafka stores records in bytes, and when a fetch request comes in from a consumer, Kafka returns records in bytes. The broker really knows nothing about its records; it just appends them to the end of a file, and that's the end of it.
+- To bring data into Kafka Streams, you provide SerDes for your topic’s key and value in the Consumed configuration object. A SerDes is a convenience function, a wrapper around the serializer for a certain type and the deserializer for a certain type.
+
+```java
+StreamsBuilder builder = new StreamsBuilder()
+KStream<String, MyObject> stream = builder.stream("topic",
+    Consumed.with(Serdes.String(), customObjectSerde)
+```
+
+- Similarly, when you write out from Kafka Streams, you have to provide a SerDes to serialize your data. Note that with state stores, you would use a Materialized to provide the SerDes.
+
+```java
+KStream<String, CustomObject> modifiedStream =
+    stream.filter( (key, value) -> value.startsWith(“ID5”))
+.mapValues( value -> new CustomObject(value));
+
+modifiedStream.to(“output-topic”, Produced.with(Serdes.String(), customObjectSerde);
+```
+
+- To create a custom SerDes, use the factory method Serdes.serdeFrom and pass both a serializer instance and a deserializer instance. Creating your own serializer and deserializer is actually not that difficult. Consult the documentation to accomplish it. You just need to implement the Serializer and Deserializer interfaces from the org.apache.kafka.clients package.
+
+```java
+Serde<T> serde = Serdes.serdeFrom( new CustomSerializer<T>,
+    new CustomDeserializer<T>);
+```
+
+- Out of the box, Kafka Streams includes SerDes for String, Integer, Double, Long, Float, Bytes, ByteArray, and ByteBuffer types.
+
+# Joins
+
+Kafka Streams provides join operations for streams and tables, enabling you to augment one dataset with another.
+
+## Stream-Stream
+
+- Stream-stream joins combine two event streams into a new stream. The streams are joined based on a common key, so keys are necessary. You define a time window, and records on either side of the join need to arrive within the defined window. Kafka Streams uses a state store under the hood to buffer records, so that when a record arrives, it can look in the other stream's state store and find records by key that fit into the time window, based on timestamps
+
+- To enact a join, you use a ValueJoiner, an interface that takes the value from the left side, the primary part of the join, and the value from the right side, the secondary join operator. You use this to compute a new value, which potentially could be of a new type (you decide what the return type will be). You can also use keys in a read-only fashion to compute the new value
+
+### Inner Joins
+
+If both sides are available during the window, a join is emitted. Thus, if the left side has a record but the right side doesn't, nothing is emitted.
+
+### Outer Joins
+
+With an outer join, both sides always produce an output record. Within the join window, if both the left side and the right side are available, a join of the two is returned. If only the left side is available, the join will have the value of the left side and a null for the right side. The converse is true: If only the right side is available, the join will include the value of the right side and a null for the left side.
+
+### Left-Outer Joins
+
+Left-outer joins also always produce output records. If both sides are available, the join consists of both sides. Otherwise, the left side will be returned with a null for the right side.
+
+## Stream-Table
+
+You learned above that stream-stream joins are windowed joins. Conversely, the types available for stream-table joins are non-windowed. You can join a KStream with a KTable and a KStream with a GlobalKTable.
+
+In a stream-table join, the stream is always on the primary side; it drives the join. Only new records arriving to the stream result in an output, and new records arriving to the table do not (this is the case for both KStream-KTable and KStream-GlobalKTable joins).
+
+### Inner
+
+An inner join only fires if both sides are available.
+
+### Left Outer
+
+The KStream always produces a record, either a combination of the left and right values, or the left value and a null representing the right side.
+
+### GlobalKTable-Stream Join Properties
+
+- With a GlobalKTable, you get full replication of the underlying topic across all instances, as opposed to sharding. GlobalKTable provides a mechanism whereby, when you perform a join with a KStream, the key of the stream doesn't have to match. You get a KeyValueMapper when you define the join, and you can derive the key to match the GlobalKTable key using the stream key and/or value.
+
+- Yet another difference between a KTable join and a GlobalKTable join is the fact that a KTable uses timestamps. With a GlobalKTable, when there is an update to the underlying topic, the update is just automatically applied. It's divorced completely from the time mechanism within Kafka Streams. (In contrast, with a KTable, timestamps are part of your event stream processing.) This means that a GlobalKTable is suited for mostly static lookup data. For example, you might use it to hold relatively static user information for matching against transactions.
+
+## Table-Table
+
+You can also join a KTable with a KTable. Note that you can only join a GlobalKTable with a KStream.
+
+## A Code Example: Joining Two Streams
+
+A **ValueJoiner** takes left and right values and returns a new value. You can return a completely new object type altogether—the return value type doesn't have to be the same as the two values coming in. Notice also the **JoinWindows** argument, which states that an event on the right side needs to have a timestamp either 10 seconds before the left-stream side or 10 seconds after the left-stream side.
+
+```java
+KStream<String, String> leftStream = builder.stream("topic-A");
+KStream<String, String> rightStream = builder.stream("topic-B");
+
+ValueJoiner<String, String, String> valueJoiner = (leftValue, rightValue) -> {
+    return leftValue + rightValue;
+};
+leftStream.join(rightStream,
+                valueJoiner,
+                JoinWindows.of(Duration.ofSeconds(10)));
+```
+
+# Hands On: Joins
+
+This module’s code can be found in the source file 'java/io/confluent/developer/joins/StreamsJoin.java'. Here is the solution
+
+```java
+package io.confluent.developer.joins;
+
+import io.confluent.developer.StreamsUtils;
+import io.confluent.developer.avro.ApplianceOrder;
+import io.confluent.developer.avro.CombinedOrder;
+import io.confluent.developer.avro.ElectronicOrder;
+import io.confluent.developer.avro.User;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
+import org.apache.avro.specific.SpecificRecord;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.JoinWindows;
+import org.apache.kafka.streams.kstream.Joined;
+import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.kstream.KTable;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.kstream.StreamJoined;
+import org.apache.kafka.streams.kstream.ValueJoiner;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+
+public class StreamsJoin {
+
+//Use a static helper method to get SerDes for your Avro records
+//(in subsequent exercises, you'll abstract this into a static utility method, in the StreamsUtils class of the course repo)
+    static <T extends SpecificRecord> SpecificAvroSerde<T> getSpecificAvroSerde(final Map<String, Object> serdeConfig) {
+        final SpecificAvroSerde<T> specificAvroSerde = new SpecificAvroSerde<>();
+        specificAvroSerde.configure(serdeConfig, false);
+        return specificAvroSerde;
+    }
+
+    public static void main(String[] args) throws IOException {
+//Use a utility method to load the properties (you can refer to the StreamsUtils class within the exercise source code)
+        Properties streamsProps = StreamsUtils.loadProperties();
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "joining-streams");
+
+        StreamsBuilder builder = new StreamsBuilder();
+//Get the input topic names and the output topic name from the properties
+        String streamOneInput = streamsProps.getProperty("stream_one.input.topic");
+        String streamTwoInput = streamsProps.getProperty("stream_two.input.topic");
+        String tableInput = streamsProps.getProperty("table.input.topic");
+        String outputTopic = streamsProps.getProperty("joins.output.topic");
+//Create a HashMap of the configurations
+        Map<String, Object> configMap = StreamsUtils.propertiesToMap(streamsProps);
+//Then create the required SerDes for all streams and for the table
+        SpecificAvroSerde<ApplianceOrder> applianceSerde = getSpecificAvroSerde(configMap);
+        SpecificAvroSerde<ElectronicOrder> electronicSerde = getSpecificAvroSerde(configMap);
+        SpecificAvroSerde<CombinedOrder> combinedSerde = getSpecificAvroSerde(configMap);
+        SpecificAvroSerde<User> userSerde = getSpecificAvroSerde(configMap);
+//Create the ValueJoiner for the stream-table join
+//The stream is a result of the preceding stream-stream join, but it's a left outer join, because the right-side record might not exist
+        ValueJoiner<ApplianceOrder, ElectronicOrder, CombinedOrder> orderJoiner =
+                (applianceOrder, electronicOrder) -> CombinedOrder.newBuilder()
+                        .setApplianceOrderId(applianceOrder.getOrderId())
+                        .setApplianceId(applianceOrder.getApplianceId())
+                        .setElectronicOrderId(electronicOrder.getOrderId())
+                        .setTime(Instant.now().toEpochMilli())
+                        .build();
+
+        ValueJoiner<CombinedOrder, User, CombinedOrder> enrichmentJoiner = (combined, user) -> {
+            if (user != null) {
+                combined.setUserName(user.getName());
+            }
+            return combined;
+        };
+//Create the ApplianceOrder stream as well as the ElectronicOrder stream
+        KStream<String, ApplianceOrder> applianceStream =
+                builder.stream(streamOneInput, Consumed.with(Serdes.String(), applianceSerde))
+                        .peek((key, value) -> System.out.println("Appliance stream incoming record key " + key + " value " + value));
+
+        KStream<String, ElectronicOrder> electronicStream =
+                builder.stream(streamTwoInput, Consumed.with(Serdes.String(), electronicSerde))
+                        .peek((key, value) -> System.out.println("Electronic stream incoming record " + key + " value " + value));
+//From here, create the User table
+        KTable<String, User> userTable =
+                builder.table(tableInput, Materialized.with(Serdes.String(), userSerde));
+
+        KStream<String, CombinedOrder> combinedStream =
+        // create a Join between the applianceStream and the electronicStream
+        // using the ValueJoiner created above, orderJoiner gets you the correct value type of CombinedOrder
+        // You want to join records within 30 minutes of each other HINT: JoinWindows and Duration.ofMinutes
+        // Add the correct Serdes for the join state stores remember both sides have same key type
+        // HINT: StreamJoined and Serdes.String  and Serdes for the applianceStream and electronicStream created above
+
+        // Optionally add this statement after the join to see the results on the console
+        // .peek((key, value) -> System.out.println("Stream-Stream Join record key " + key + " value " + value));
+        // Now that you have the combinedStream, you can join it with the userTable
+                        applianceStream.join(
+                                electronicStream,
+                                orderJoiner,
+                                JoinWindows.of(Duration.ofMinutes(30)),
+                                StreamJoined.with(Serdes.String(), applianceSerde, electronicSerde))
+                        .peek((key, value) -> System.out.println("Stream-Stream Join record key " + key + " value " + value));
+
+        // Now join the combinedStream with the userTable,
+        // but you'll always want a result even if no corresponding entry is found in the table
+        // Using the ValueJoiner created above, enrichmentJoiner, return a CombinedOrder instance enriched with user information
+        // You'll need to add a Joined instance with the correct Serdes for the join state store
+
+        // Add these two statements after the join call to print results to the console and write results out
+        // to a topic
+
+        // .peek((key, value) -> System.out.println("Stream-Table Join record key " + key + " value " + value))
+        // .to(outputTopic, Produced.with(Serdes.String(), combinedSerde));
+        combinedStream.leftJoin(
+                        userTable,
+                        enrichmentJoiner,
+                        Joined.with(Serdes.String(), combinedSerde, userSerde))
+                .peek((key, value) -> System.out.println("Stream-Table Join record key " + key + " value " + value))
+                .to(outputTopic, Produced.with(Serdes.String(), combinedSerde));
+
+
+        try (KafkaStreams kafkaStreams = new KafkaStreams(builder.build(), streamsProps)) {
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                kafkaStreams.close(Duration.ofSeconds(2));
+                shutdownLatch.countDown();
+            }));
+            TopicLoader.runProducer();
+            try {
+                kafkaStreams.start();
+                shutdownLatch.await();
+            } catch (Throwable e) {
+                System.exit(1);
+            }
+        }
+        System.exit(0);
+    }
+}
+```
+
+- You can run the joins example with this command:
+
+```bash
+./gradlew runStreams -Pargs=joins
+```
+
+- The output for the exercise should like this:
+  ![Joins](assets/images/14.png)
+
+- I had to add the schema registry configs in the **streams.properties** file inorder to make this work
+
+```bash
+schema.registry.url=https://abcd-fgt456.us-south4.gcp.confluent.cloud
+basic.auth.credentials.source=USER_INFO
+basic.auth.user.info=API_KEY:API_SECRET
+```
