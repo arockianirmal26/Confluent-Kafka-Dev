@@ -1290,3 +1290,121 @@ public class ProcessorApi {
 
 - The output for the exercise should like this:
   ![Processor](assets/images/20.png)
+
+# Testing
+
+- Kafka Streams connects to brokers. But in unit testing terms, it’s expensive to have all of your tests rely on a broker connection. You do want to have some level of integration testing, but you want to use a unit-test type of framework. Furthermore, with Kafka Streams, you have connected components in a topology, and ideally you'd like to test each one in isolation, but you'd also like an end-to-end test that is as fast as possible
+
+- **TopologyTestDriver** solves these issues: it lets you unit test a topology in an end-to-end test, but without a broker. Integration testing should still be done with a live broker, but it can be done sparingly, and it's not needed for all tests.
+
+## TopologyTestDriver
+
+- With the **TopologyTestDriver**, you build your topology as usual, including all of the configurations. Even if you're using Schema Registry with Kafka Streams, you can still use the **TopologyTestDriver**. **MockSchemaRegistry** is an in-memory version of Schema Registry, and can be specified by the URL provided in the configuration; instead of **http://** you put in **mock://**, and the test will automatically use the **MockSchemaRegistry**.
+
+- First, you instantiate your **TopologyTestDriver**, using your topology and configurations as constructor parameters. Then you create **TestInputTopic** instances. These feed your topology records. Next, you call **TestInputTopic.pipeInput** with **KeyValue** objects. There are also overloaded methods that allow you to provide timestamps, lists of records, etc.
+
+- When you execute **TestInputTopic.pipeInput**, it triggers stream-time punctuation. So if you don't provide timestamps on the records, then under the hood, each record is advanced by current wall-clock time. But you can provide your own timestamps within the records to trigger certain behaviors that would happen within a Kafka Streams application.
+
+- Within TopologyTestDriver's wall-clock punctuation, you can trigger punctuation based on stream time using the timestamps that you give to the records. But wall-clock punctuation will only be fired if you call a method called **advanceWallClockTime**.
+
+## TestOutputTopicInstances
+
+**TestOutputTopicInstances** mock out the sink nodes, the topics to which you will write. After you've called **.pipeInput** for all of the records you've sent through, you call **TestInputTopic.readKeyValue** and assert the results. There are overloaded methods to read all of the values in a list, read KeyValues in a list, and read KeyValues in a map.
+
+## Testable Applications
+
+The Kafka Streams DSL has several operators that take a SAM interface, so you can use lambda expressions with them. The downside is that you can't easily test the lambdas in isolation; you have to test them with the topology as you've wired it up. So you might want to consider instead writing a concrete class, which would let you write a separate test for it.
+
+## Integration Tests
+
+- You always need some level of integration testing against a live broker. For example, you want to see how your stateful operations behave in a real environment. TopologyTestDriver doesn't have caching behavior or commits, and it doesn't write to real topics.
+
+- The best choice for brokers in an integration test is the TestContainers library: It has annotations that can easily control the broker lifecycle, and it's possible to share a container across multiple test classes, which leads to reduced testing time.
+
+# Hands On: Testing
+
+- This module’s code can be found in the source file 'src/test/java/io/confluent/developer/aggregate/StreamsAggregateTest.java'.
+
+- In this exercise, you will write a unit test for the aggregation Kafka Streams application. You've already added the **KStream** and the required pieces, so you’ll concentrate on what you need for a unit test using the **TopologyTestDriver** (no broker needed)
+
+- Here is the final code
+
+```java
+package io.confluent.developer.aggregate.solution;
+
+import io.confluent.developer.StreamsUtils;
+import io.confluent.developer.avro.ElectronicOrder;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.TestOutputTopic;
+import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.kstream.Produced;
+import org.junit.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+import static org.junit.Assert.assertEquals;
+
+public class StreamsAggregateTest {
+
+    @Test
+    public void shouldAggregateRecords() {
+
+        final Properties streamsProps = new Properties();
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "aggregate-test");
+        streamsProps.put("schema.registry.url", "mock://aggregation-test");
+
+        final String inputTopicName = "input";
+        final String outputTopicName = "output";
+        final Map<String, Object> configMap =
+                StreamsUtils.propertiesToMap(streamsProps);
+
+        final SpecificAvroSerde<ElectronicOrder> electronicSerde =
+                StreamsUtils.getSpecificAvroSerde(configMap);
+        final Serde<String> stringSerde = Serdes.String();
+        final Serde<Double> doubleSerde = Serdes.Double();
+
+        final StreamsBuilder builder = new StreamsBuilder();
+        final KStream<String, ElectronicOrder> electronicStream =
+                builder.stream(inputTopicName, Consumed.with(Serdes.String(), electronicSerde));
+
+        electronicStream.groupByKey().aggregate(() -> 0.0,
+                (key, order, total) -> total + order.getPrice(),
+                Materialized.with(stringSerde, doubleSerde))
+                .toStream().to(outputTopicName, Produced.with(Serdes.String(), Serdes.Double()));
+
+        try (final TopologyTestDriver testDriver = new TopologyTestDriver(builder.build(), streamsProps)) {
+            final TestInputTopic<String, ElectronicOrder> inputTopic =
+                    testDriver.createInputTopic(inputTopicName,
+                            stringSerde.serializer(),
+                            electronicSerde.serializer());
+            final TestOutputTopic<String, Double> outputTopic =
+                    testDriver.createOutputTopic(outputTopicName,
+                            stringSerde.deserializer(),
+                            doubleSerde.deserializer());
+
+            final List<ElectronicOrder> orders = new ArrayList<>();
+            orders.add(ElectronicOrder.newBuilder().setElectronicId("one").setOrderId("1").setUserId("vandeley").setTime(5L).setPrice(5.0).build());
+            orders.add(ElectronicOrder.newBuilder().setElectronicId("one").setOrderId("2").setUserId("penny-packer").setTime(5L).setPrice(15.0).build());
+            orders.add(ElectronicOrder.newBuilder().setElectronicId("one").setOrderId("3").setUserId("romanov").setTime(5L).setPrice(25.0).build());
+
+            List<Double> expectedValues = List.of(5.0, 20.0, 45.0);
+            orders.forEach(order -> inputTopic.pipeInput(order.getElectronicId(), order));
+            List<Double> actualValues = outputTopic.readValuesToList();
+            assertEquals(expectedValues, actualValues);
+        }
+
+    }
+
+}
+```
