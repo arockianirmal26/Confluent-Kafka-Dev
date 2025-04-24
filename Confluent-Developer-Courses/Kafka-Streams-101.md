@@ -1408,3 +1408,181 @@ public class StreamsAggregateTest {
 
 }
 ```
+
+# Error Handling
+
+Distributed systems will always encounter errors, but not every error is a stop-the-world situation: Network-partition errors, for example, usually resolve pretty quickly. Or there could be a change in partition ownership: Brokers in Apache Kafka® are responsible for a certain number of partitions, and if you make a produce or fetch request during an ownership change, it will result in an error. But it's considered a recoverable error, which means that the request will try again.<br/>
+
+Generally, you need to provide a graceful mechanism for recovering from errors. You want recovery to happen automatically if possible, and you want to shut down only if the situation is truly unrecoverable.
+
+## Kafka Streams Error Categories
+
+Kafka Streams has three broad categories of errors: entry (consumer) errors, processing (user logic) errors, and exit (producer) errors.
+
+### Entry
+
+- This type of error happens when records are coming in, and is usually a network or deserialization error.
+
+- The related error handler is the **DeserializationExceptionHandler** interface, which has a default configuration of **LogAndFailExceptionHandler**. This default handler logs the exception and then fails. The other option is the **LogAndContinueExceptionHandler**, which logs the error but continues to run. You can also provide a custom implementation and specify the classname via a Kafka Streams configuration.
+
+### Processing
+
+- Generally, any exception related to logic that you provide will eventually bubble up and shut down the application. This could be related to mismatched types, for example. Kafka Streams provides a **StreamsUncaughtExceptionHandler** to deal with these exceptions, which are not handled by Kafka Streams (an example would be the **ProducerFencedException**).
+
+- The **StreamsUncaughtExceptionHandler** returns an enum, and you have three options: you can replace the StreamThread, shut down the individual Kafka Streams instance, or shut down all Kafka Streams instances (i.e., all instances with the same application ID, which are viewed as one application by the brokers). If the error is severe enough, you want to shut down all applications. This is accomplished via a rebalance, where the command to shut down is communicated to all of the instances.
+
+### Exit
+
+This type of error happens when writing records to a Kafka topic and is usually related to network or serialization errors (a common example is the **RecordTooLargeException**). These errors are handled with the **ProductionExceptionHandler** interface, and you can respond by continuing to process, or by failing. Note that the **ProductionExceptionHandler** only applies to exceptions that are not handled by Kafka Streams; it doesn't apply, for example, to a security exception, an authorization exception, or an invalid host exception (these would always result in failure). The default configuration for the **ProductionExceptionHandler** is the **DefaultProductionExceptionHandler**, and it always fails. For any other option, you need to provide your own implementation.
+
+## Error Handling – Client Related
+
+- Kafka Streams uses embedded producer and consumer instances. These clients have their own configurations, defaults that you don't usually need to worry about.
+
+- But if you optimize for resilience, then the way in which some of these client configurations handle errors—for example, by blocking—will interfere with your efforts. In other words, optimizing your configurations could have adverse effects on your Kafka Streams application in terms of how long it takes to process records. On the other hand, if you're too loose with your configurations, it's possible that your application could shut down even for transient issues.
+
+- One solution is a configuration called **task.timeout.config**, which starts a timer when errors occur, so that Kafka Streams can try to make progress with other tasks. The failed task is retried until the timeout is reached, at which point it will finally fail.
+
+# Hands On: Error Handling
+
+- This module’s code can be found in the source file 'java/io/confluent/developer/errors/StreamsErrorHandling.java'
+
+- In this exercise, you'll essentially take the **Basic Operations** exercise and add error handling code to it. Here is the solution
+
+```java
+package io.confluent.developer.errors;
+
+import io.confluent.developer.StreamsUtils;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.errors.RecordTooLargeException;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.errors.DeserializationExceptionHandler;
+import org.apache.kafka.streams.errors.ProductionExceptionHandler;
+import org.apache.kafka.streams.errors.StreamsException;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
+import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.processor.ProcessorContext;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+
+public class StreamsErrorHandling {
+    //This is for learning purposes only!
+    static boolean throwErrorNow = true;
+
+    public static class StreamsDeserializationErrorHandler implements DeserializationExceptionHandler {
+        int errorCounter = 0;
+
+        @Override
+        public DeserializationHandlerResponse handle(ProcessorContext context,
+                                                     ConsumerRecord<byte[], byte[]> record,
+                                                     Exception exception) {
+            if (errorCounter++ < 25) {
+                return DeserializationHandlerResponse.CONTINUE;
+            }
+            return DeserializationHandlerResponse.FAIL;
+        }
+
+        @Override
+        public void configure(Map<String, ?> configs) {
+        }
+    }
+
+    public static class StreamsRecordProducerErrorHandler implements ProductionExceptionHandler {
+        @Override
+        public ProductionExceptionHandlerResponse handle(ProducerRecord<byte[], byte[]> record,
+                                                         Exception exception) {
+            if (exception instanceof RecordTooLargeException) {
+                return ProductionExceptionHandlerResponse.CONTINUE;
+            }
+            return ProductionExceptionHandlerResponse.FAIL;
+        }
+
+        @Override
+        public void configure(Map<String, ?> configs) {
+        }
+    }
+
+    public static class StreamsCustomUncaughtExceptionHandler implements StreamsUncaughtExceptionHandler {
+        @Override
+        public StreamThreadExceptionResponse handle(Throwable exception) {
+            if (exception instanceof StreamsException) {
+                Throwable originalException = exception.getCause();
+                if (originalException.getMessage().equals("Retryable transient error")) {
+                    return StreamThreadExceptionResponse.REPLACE_THREAD;
+                }
+            }
+            return StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
+        }
+    }
+
+    public static void main(String[] args) throws IOException {
+        final Properties streamsProps = StreamsUtils.loadProperties();
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "streams-error-handling");
+
+        streamsProps.put(StreamsConfig.DEFAULT_DESERIALIZATION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                StreamsDeserializationErrorHandler.class);
+        streamsProps.put(StreamsConfig.DEFAULT_PRODUCTION_EXCEPTION_HANDLER_CLASS_CONFIG,
+                StreamsRecordProducerErrorHandler.class);
+
+
+        StreamsBuilder builder = new StreamsBuilder();
+        final String inputTopic = streamsProps.getProperty("error.input.topic");
+        final String outputTopic = streamsProps.getProperty("error.output.topic");
+
+        final String orderNumberStart = "orderNumber-";
+        KStream<String, String> streamWithErrorHandling =
+                builder.stream(inputTopic, Consumed.with(Serdes.String(), Serdes.String()))
+                        .peek((key, value) -> System.out.println("Incoming record - key " + key + " value " + value));
+
+        streamWithErrorHandling.filter((key, value) -> value.contains(orderNumberStart))
+                .mapValues(value -> {
+                    if (throwErrorNow) {
+                        throwErrorNow = false;
+                        throw new IllegalStateException("Retryable transient error");
+                    }
+                    return value.substring(value.indexOf("-") + 1);
+                })
+                .filter((key, value) -> Long.parseLong(value) > 1000)
+                .peek((key, value) -> System.out.println("Outgoing record - key " + key + " value " + value))
+                .to(outputTopic, Produced.with(Serdes.String(), Serdes.String()));
+
+        try (KafkaStreams kafkaStreams = new KafkaStreams(builder.build(), streamsProps)) {
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                kafkaStreams.close(Duration.ofSeconds(2));
+                shutdownLatch.countDown();
+            }));
+            TopicLoader.runProducer();
+            try {
+                kafkaStreams.start();
+                shutdownLatch.await();
+            } catch (Throwable e) {
+                System.exit(1);
+            }
+        }
+        System.exit(0);
+    }
+}
+```
+
+- You can run the above with this command:
+
+```bash
+ ./gradlew runStreams -Pargs=errors
+```
+
+- The output for the exercise should like this:
+  ![Errors](assets/images/21.png)
+
+  **This is the final exercise in the course, so make sure to delete your Confluent Cloud cluster. To do this, go to Cluster settings on the left-hand side menu, then click Delete cluster. Enter your cluster name, then select Continue.**
