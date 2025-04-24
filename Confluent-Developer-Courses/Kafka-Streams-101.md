@@ -1056,3 +1056,237 @@ public class StreamsTimestampExtractor {
 
 - The output for the exercise should like this:
   ![Time Concept](assets/images/19.png)
+
+# Processor API
+
+- So far you've learned about the Kafka Streams DSL, which gives you maximum developer velocity when building an application, but is very opinionated. Sometimes you need to accomplish things that aren't provided to you by the DSL, and that's where the Processor API comes in. It gives you maximum flexibility, but you are responsible for all of the details
+
+The Processor API gives you access to state stores for custom stateful operations. In the **Stateful Operations** module, you learned about state and the DSL, which uses under-the-hood state stores that you can't directly access. With the Processor API, you create a store that you pass in, so you have full access to the store: You can pull out all of the records, you can do a range query, you can do all sorts of things. You can also programmatically call commit, and you can control how often it's called.
+
+## Punctuation
+
+Punctuation gives you the ability to schedule arbitrary operations. When you schedule a punctuator, it can use either stream-time processing or wall-clock-time processing.
+
+### Stream-Time Processing
+
+With stream-time processing, you schedule punctuation for an arbitrary action that you want to fire periodically—every 30 seconds, for example—and the action is driven by the timestamps on the records.
+
+### Wall-Clock-Time Processing
+
+You can also schedule punctuation according to wall-clock time. Under the hood, Kafka Streams uses a consumer, and consumers call poll() to get records. Wall-clock time advances with the poll() calls. So wall-clock time advancement depends in part on how long it takes you to return from a poll() loop.
+
+## Building Streams Applications with the Processor API
+
+You will recall the Kafka Streams topology from the **Basic Operations** module. Related to that, Kafka Streams applications with the Processor API are typically built as follows:
+
+- Add source node(s)
+- Add N number of processors, child nodes of the source node(s) (child nodes can have any number of parents)
+- Optionally create StoreBuilder instances and attach them to the processor nodes to give them access to state stores
+- Add sink node(s), to which one or more parent nodes forward records
+
+When you create nodes, you need to provide a name for each one, since you use the name of one node as the parent name of another. As mentioned, a node can have more than one child node, but you can be selective about the nodes to which you forward records.
+
+### Creating a Topology with the Processor API
+
+Creating a topology involves straightforward code:
+
+```java
+Topology topology = new Topology();
+
+topology.addSource(“source-node”, “topicA”, ”topicB”);
+
+topology.addProcessor(“custom-processor”, new CustomProcessorSupplier(storeName), “source-node”);
+
+toplogy.addSink(“sink-node”, “output-topic”, “custom-processor”);
+```
+
+First you create an instance and add a source node. Then you add a custom processor, whose parent is the source node. Finally, you create a sink node, whose parent is the custom processor. For any one of these nodes, you can have multiple parent nodes and multiple child nodes—this is just a simple example.
+
+# Hands On: Processor API
+
+- This module’s code can be found in the source file 'java/io/confluent/developer/processor/ProcessorApi.java'.
+- In this exercise, you will create an aggregation that calls a punctuation every 30 seconds. You'll use a **ProcessorSupplier** and **Processor** instance, whereby the **Processor** will contain all of your stream processing logic.
+- Here is the final code
+
+```java
+package io.confluent.developer.processor;
+
+import io.confluent.developer.avro.ElectronicOrder;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.KeyValue;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.processor.PunctuationType;
+import org.apache.kafka.streams.processor.api.Processor;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.ProcessorSupplier;
+import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.state.KeyValueIterator;
+import org.apache.kafka.streams.state.KeyValueStore;
+import org.apache.kafka.streams.state.StoreBuilder;
+import org.apache.kafka.streams.state.Stores;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+
+import static io.confluent.developer.StreamsUtils.*;
+
+public class ProcessorApi {
+//Create the ProcessorSupplier implementation
+    static class TotalPriceOrderProcessorSupplier implements ProcessorSupplier<String, ElectronicOrder, String, Double> {
+        final String storeName;
+
+        public TotalPriceOrderProcessorSupplier(String storeName) {
+            this.storeName = storeName;
+        }
+//Add a constructor. The get() method implementation is important, since it returns a new processor instance each time it's called.
+//You'll also declare a variable for ProcessorContext and KeyValueStore, and implement the init method, which is called by Kafka Streams when the application is starting up.
+//In the init method, store a reference to the Processor context, get a reference to the state store by name, and store it in the storeName variable declared above.
+//Then use the processor context to schedule a punctuation that fires every 30 seconds, based on stream time.
+        @Override
+        public Processor<String, ElectronicOrder, String, Double> get() {
+            return new Processor<>() {
+                private ProcessorContext<String, Double> context;
+                private KeyValueStore<String, Double> store;
+
+                @Override
+                public void init(ProcessorContext<String, Double> context) {
+                    // Save reference of the context
+                    // Retrieve the store and save a reference
+                    // Schedule a punctuation  HINT: use context.schedule and the method you want to call is forwardAll
+                    this.context = context;
+                    store = context.getStateStore(storeName);
+                    this.context.schedule(Duration.ofSeconds(30), PunctuationType.STREAM_TIME, this::forwardAll);
+                }
+//Implement the forwardAll method, beginning by opening an iterator for all records in the store.
+                private void forwardAll(final long timestamp) {
+                    // Get a KeyValueIterator HINT there's a method on the KeyValueStore
+                    // Don't forget to close the iterator! HINT use try-with resources
+                    // Iterate over the records and create a Record instance and forward downstream HINT use a method on the ProcessorContext to forward
+                    try (KeyValueIterator<String, Double> iterator = store.all()) {
+                        while (iterator.hasNext()) {
+                            final KeyValue<String, Double> nextKV = iterator.next();
+                            final Record<String, Double> totalPriceRecord = new Record<>(nextKV.key, nextKV.value, timestamp);
+                            context.forward(totalPriceRecord);
+                            System.out.println("Punctuation forwarded record - key " + totalPriceRecord.key() + " value " + totalPriceRecord.value());
+                        }
+                    }
+                }
+
+//Implement the Process method on the Processor interface by first getting the key from the Record, then using the key to see if there is a value in the state store.
+//If it's null, initialize it to "0.0". Add the current price from the record to the total, and place the new value in the store with the given key.
+
+                @Override
+                public void process(Record<String, ElectronicOrder> record) {
+                    // Get the current total from the store HINT: use the key on the record
+                    // Don't forget to check for null
+                    // Add the price from the value to the current total from store and put it in the store
+                    // HINT state stores are key-value stores
+                    final String key = record.key();
+                    Double currentTotal = store.get(key);
+                    if (currentTotal == null) {
+                        currentTotal = 0.0;
+                    }
+                    Double newTotal = record.value().getPrice() + currentTotal;
+                    store.put(key, newTotal);
+                    System.out.println("Processed incoming record - key " + key + " value " + record.value());
+                }
+            };
+        }
+//With StoreBuilder complete (as below), now override the Stores method on the Processor interface, which gives the Processor access to the store
+        @Override
+        public Set<StoreBuilder<?>> stores() {
+            return Collections.singleton(totalPriceStoreBuilder);
+        }
+    }
+
+// We're not quite done with the ProcessorSupplier implementation, but we have some details to attend to first.
+// Define the storeName variable and create a StoreBuilder, which you'll need for creating the state store.
+// In the StoreBuilder, set the store type to persistent and use the storeName variable for the name of the store.
+// Add SerDes for the key/value types in the store (Kafka Streams stores everything as byte arrays in state stores)
+
+    final static String storeName = "total-price-store";
+    static StoreBuilder<KeyValueStore<String, Double>> totalPriceStoreBuilder = Stores.keyValueStoreBuilder(
+            Stores.persistentKeyValueStore(storeName),
+            Serdes.String(),
+            Serdes.Double());
+
+    public static void main(String[] args) throws IOException {
+        final Properties streamsProps = loadProperties();
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "processor-api-application");
+
+        final String inputTopic = streamsProps.getProperty("processor.input.topic");
+        final String outputTopic = streamsProps.getProperty("processor.output.topic");
+        final Map<String, Object> configMap = propertiesToMap(streamsProps);
+
+        final SpecificAvroSerde<ElectronicOrder> electronicSerde = getSpecificAvroSerde(configMap);
+        final Serde<String> stringSerde = Serdes.String();
+        final Serde<Double> doubleSerde = Serdes.Double();
+
+        final Topology topology = new Topology();
+
+        // Add a source node to the topology  HINT: topology.addSource
+        // Give it a name, add deserializers for the key and the value and provide the input topic name
+        topology.addSource(
+            "source-node",
+            stringSerde.deserializer(),
+            electronicSerde.deserializer(),
+            inputTopic);
+
+        // Now add a processor to the topology HINT topology.addProcessor
+        // You'll give it a name, add a processor supplier HINT: a new instance and provide the store name
+        // You'll also provide a parent name HINT: it's the name you used for the source node
+        topology.addProcessor(
+            "aggregate-price",
+            new TotalPriceOrderProcessorSupplier(storeName),
+            "source-node");
+
+        // Finally, add a sink node HINT topology.addSink
+        // As before give it a name, the output topic name, serializers for the key and value HINT: string and double
+        // and the name of the parent node HINT it's the name you gave the processor
+
+        topology.addSink(
+            "sink-node",
+            outputTopic,
+            stringSerde.serializer(),
+            doubleSerde.serializer(),
+            "aggregate-price");
+
+//Finally, instantiate the kafkaStreams object, add the utility method for creating topics and providing sample data, and start the application
+
+        try (KafkaStreams kafkaStreams = new KafkaStreams(topology, streamsProps)) {
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                kafkaStreams.close(Duration.ofSeconds(2));
+                shutdownLatch.countDown();
+            }));
+            TopicLoader.runProducer();
+            try {
+                kafkaStreams.start();
+                shutdownLatch.await();
+            } catch (Throwable e) {
+                System.exit(1);
+            }
+        }
+        System.exit(0);
+    }
+}
+```
+
+- You can run the above with this command:
+
+```bash
+./gradlew runStreams -Pargs=processor
+```
+
+- The output for the exercise should like this:
+  ![Processor](assets/images/20.png)
