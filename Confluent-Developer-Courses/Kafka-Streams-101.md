@@ -605,3 +605,143 @@ schema.registry.url=https://abcd-fgt456.us-south4.gcp.confluent.cloud
 basic.auth.credentials.source=USER_INFO
 basic.auth.user.info=API_KEY:API_SECRET
 ```
+
+# Stateful Operations
+
+Stateless operations in Kafka Streams are quite useful if you are just filtering or doing some other operation that doesn't need to collect data. In other scenarios, however, you may need to remember something about previous records. For example, you may want to know how many times a specific customer has logged in, or the total number of tickets sold.<br/>
+
+In a stateful operation, you typically group by key first, so keys have to be present. If they're not, you can derive a key, but you will have to repartition. Repartitioning is basically the act of writing back out to a topic so that keys will end up on correct partitions. If you create a new key, chances are that it will not be on the partition where it belongs.<br/>
+
+Stateful operations in Kafka Streams are backed by state stores. The default is a persistent state store implemented in RocksDB, but you can also use in-memory stores. State stores are backed up by a changelog topic, making state in Kafka Streams fault-tolerant. When you call a stateful operation, a KTable is returned (recall that in a table, new values overwrite previous ones). Stateful operations in Kafka Streams include reduce, count, and aggregate.<br/>
+
+## Reduce
+
+With reduce, you take an interface of Reducer, a Single Abstract Method that takes one value type as a parameter, and you apply an operation. Reduce expects you to return the same type. Here is a reduce that sums
+
+```java
+StreamsBuilder builder = new StreamsBuilder();
+KStream<String, Long> myStream = builder.stream("topic-A");
+Reducer<Long> reducer = (longValueOne, longValueTwo) -> longValueOne + longValueTwo;
+myStream.groupByKey().reduce(reducer,
+                             Materialized.with(Serdes.String(), Serdes.Long()))
+                            .toStream().to("output-topic");
+```
+
+You create your stream, then group by key (this assumes that your stream is correctly keyed). Then you call **reduce** and pass in your **reducer**. Notice also that you are providing SerDes for the store in **Materialized**. There's a chance that you would have defined your SerDes up front, either via a **Consumed** object or via configuration. So if you had defined the SerDes for the key as a string and the value as a long via your configuration, you wouldn't need to do this. But typically, it's best to provide SerDes here; it will be clearer when you go to look back at the code (RocksDB and in-memory stores don't store objects, but bytes). Notice also that **reduce** returns a KTable, but the **to** operator doesn't exist in the KTable API, so we have to convert to a stream: We're converting our records stream to an event stream, and writing it to an output topic.
+
+## Aggregation
+
+Aggregate is a form of reduce, but with aggregate, you can return a different type:
+
+```java
+StreamsBuilder builder = new StreamsBuilder();
+KStream<String, String> myStream = builder.stream("topic-A");
+
+Aggregator<String, String, Long> characterCountAgg =
+    (key, value, charCount) -> value.length() + charCount;
+myStream.groupByKey().aggregate(() -> 0L,
+                                      characterCountAgg,
+                                      Materialized.with(Serdes.String(), Serdes.Long()))
+                                      .toStream().to("output-topic");
+```
+
+In this example, our inputs are strings: a string key and a string value. With **aggregate** in Kafka Streams, you provide an **initializer** and an **aggregator**. Our **initializer** in this case adds a zero value as a long, and then we have **characterCountAgg**, which basically takes the key and value and the previous count. You take the length of your string and add it to the previous count so that it builds up a running count. Here, it's critical that we provide the SerDes for the state store, because we're changing the type. (The type of our stream is string/string for the key/value, but for our store, it's going to be string/long.) Then we call **.toStream()** and send to an output topic.
+
+## Considerations
+
+Stateful operations don't emit results immediately. Kafka Streams has an internal buffering mechanism that caches results. Two factors control when the cache emits records: Records are emitted when the cache is full (defined equally per instance among the number of stores; it's 10MB), and by default, Kafka Streams calls **commit** every 30 seconds (you don't call **commit** yourself). At this point, you would see an update. In order to see every update that comes through your aggregation, you can set your cache size to zero (which is also useful for debugging).
+
+Even with caching, you will get multiple results, so for a single and final stateful result, you should use suppression overloads with **aggregate/reduce** operations.
+
+# Hands On: Aggregations
+
+This module’s code can be found in the source file 'java/io/confluent/developer/aggregate/StreamsAggregate.java'. Here is the final code
+
+```java
+package io.confluent.developer.aggregate;
+
+import io.confluent.developer.StreamsUtils;
+import io.confluent.developer.avro.ElectronicOrder;
+import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
+import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.streams.KafkaStreams;
+import org.apache.kafka.streams.StreamsBuilder;
+import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.KStream;
+import org.apache.kafka.streams.kstream.Materialized;
+import org.apache.kafka.streams.kstream.Produced;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.CountDownLatch;
+
+public class StreamsAggregate {
+
+    public static void main(String[] args) throws IOException {
+
+        final Properties streamsProps = StreamsUtils.loadProperties();
+        streamsProps.put(StreamsConfig.APPLICATION_ID_CONFIG, "aggregate-streams");
+
+        StreamsBuilder builder = new StreamsBuilder();
+//let’s extract the names of the topics from the configuration, which we’ve already loaded via a static helper method.
+// Then we’ll convert the properties to a HashMap and use another utility method to create the specific record AvroSerde
+        final String inputTopic = streamsProps.getProperty("aggregate.input.topic");
+        final String outputTopic = streamsProps.getProperty("aggregate.output.topic");
+        final Map<String, Object> configMap = StreamsUtils.propertiesToMap(streamsProps);
+
+        final SpecificAvroSerde<ElectronicOrder> electronicSerde =
+                StreamsUtils.getSpecificAvroSerde(configMap);
+
+//Create the electronic orders stream
+        final KStream<String, ElectronicOrder> electronicStream =
+                builder.stream(inputTopic, Consumed.with(Serdes.String(), electronicSerde))
+                        .peek((key, value) -> System.out.println("Incoming record - key " + key + " value " + value));
+
+        // Now take the electronicStream object, group by key and perform an aggregation
+        // Don't forget to convert the KTable returned by the aggregate call back to a KStream using the toStream method
+//Execute a groupByKey followed by aggregate (initialize the aggregator with "0.0," a double value)
+        electronicStream.groupByKey().aggregate(() -> 0.0,
+//Now add the aggregator implementation, which takes each order and adds the price to a running total, a sum of all electronic orders.
+//Also add a Materialized, which is necessary to provide state store SerDes since the value type has changed
+                (key, order, total) -> total + order.getPrice(),
+                Materialized.with(Serdes.String(), Serdes.Double()))
+//Call toStream() on the KTable that results from the aggregation operation, add a peek operation to print the results of the aggregation, and then add a .to operator to write the results to a topic
+                .toStream()
+
+        // To view the results of the aggregation consider
+        // right after the toStream() method .peek((key, value) -> System.out.println("Outgoing record - key " +key +" value " + value))
+                .peek((key, value) -> System.out.println("Outgoing record - key " +key +" value " + value))
+        // Finally write the results to an output topic
+                .to(outputTopic, Produced.with(Serdes.String(), Serdes.Double()));
+
+        try (KafkaStreams kafkaStreams = new KafkaStreams(builder.build(), streamsProps)) {
+            final CountDownLatch shutdownLatch = new CountDownLatch(1);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                kafkaStreams.close(Duration.ofSeconds(2));
+                shutdownLatch.countDown();
+            }));
+            TopicLoader.runProducer();
+            try {
+                kafkaStreams.start();
+                shutdownLatch.await();
+            } catch (Throwable e) {
+                System.exit(1);
+            }
+        }
+        System.exit(0);
+    }
+}
+```
+
+- You can run the above with this command:
+
+```bash
+./gradlew runStreams -Pargs=aggregate
+```
+
+- The output for the exercise should like this:
+  ![Aggregation](assets/images/15.png)
