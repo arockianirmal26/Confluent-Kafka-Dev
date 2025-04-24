@@ -921,3 +921,33 @@ public class StreamsWindows {
   ![Windowing](assets/images/16.png)
 
 Note that the example uses simulated timestamps for the different keys, so the results only approximate what you would see in production
+
+# Time Concepts
+
+Timestamps are a critical component of Apache Kafka®, and they similarly drive the behavior of Kafka Streams. You can configure timestamps to follow either event time (the default) or log-append time.
+
+## Event Time
+
+With event time, producers automatically create a timestamp with the current time of the producer's environment if you don't add your own.
+
+## Log-Append Time
+
+With log-append time, when the record arrives at the broker, the broker will override the timestamp of the producer record with its own timestamp (the current time of the broker environment) as it appends the record to the log.
+
+## Timestamps Drive the Action in Kafka Streams
+
+The windowing operations that you learned about in the **Windowing module** are driven by record timestamps, not by wall-clock time. In Kafka Streams, the earliest timestamp across all partitions is chosen first for processing, and Kafka Streams uses the **TimeStampExtractor** interface to get the timestamp from the current record.
+
+The default behavior is to use the timestamp from a **ConsumerRecord**, which has a timestamp set by either the producer or the broker. The default implementation of **TimeStampExtractor** is **FailOnInvalidTimestamp**, which means that if you get a timestamp less than zero, it will throw an exception. If you want to use a timestamp that is embedded in the record key or value itself, you can provide a custom **TimeStampExtractor**.
+
+## Stream Time
+
+Kafka Streams uses the concept of stream time:
+
+![stream-time](assets/images/17.png)
+
+Stream time, by definition, is the largest timestamp seen so far, and it only moves forward, not backward. If an out-of-order record arrives (meaning a record that is earlier than the current stream time, but still within the window plus the grace period), stream time stays where it is.<br/>
+
+Late records have timestamps outside of the combined window time and grace period. The delay of a record is determined by taking the stream time minus the event timestamp.
+
+![stream-time-1](assets/images/18.png)
