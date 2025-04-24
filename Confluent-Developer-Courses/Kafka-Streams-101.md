@@ -1586,3 +1586,55 @@ public class StreamsErrorHandling {
   ![Errors](assets/images/21.png)
 
   **This is the final exercise in the course, so make sure to delete your Confluent Cloud cluster. To do this, go to Cluster settings on the left-hand side menu, then click Delete cluster. Enter your cluster name, then select Continue.**
+
+# Internals
+
+## Tasks
+
+Kafka Streams uses the concept of a task as a work unit. It's the smallest unit of work within a Kafka Streams application instance. The number of tasks is driven by the number of input partitions. For example, if you have a Kafka Streams application that only subscribes to one topic, and that topic has six partitions, your Kafka Streams application would have six tasks. But if you have multiple topics, the application takes the highest partition count among the topics.
+
+## Threads
+
+Tasks are assigned to StreamThread(s) for execution. The default Kafka Streams application has one StreamThread. So if you have five tasks and one StreamThread, that StreamThread will work records for each task in turn. However, in Kafka Streams, you can have as many threads as there are tasks. So for five tasks, you could configure your application to have five threads. Each task gets its own thread, and any remaining threads are idle.
+
+## Instances
+
+With respect to task assignment, application instances are similar to tasks. If you have an input topic with five partitions, you could spin up five Kafka Streams instances that all have the same application ID, and each application would be assigned and process one task. Spinning up new applications provides the same increase in throughput as increasing threads. Just like with threads, if you spin up more application instances than tasks, the extra instances will be idle, although available for failover. The advantage is that this behavior is dynamic; it doesn't involve shutting anything down. You can spin up instances on the fly, and you can take down instances.
+
+## Consumer Group Protocol
+
+Because Kafka Streams uses a Kafka consumer internally, it inherits the dynamic scaling properties of the consumer group protocol. So when a member leaves the group, it reassigns resources to the other active members. When a new member joins the group, it pulls resources from the existing members and gives them to the new member. And as mentioned, this can be done at runtime, without shutting down any currently running applications.
+
+So you should set up as many instances as you need until all of your tasks are accounted for. Then in times when traffic is reduced, you can take down instances and the resources will be automatically reassigned.
+
+# Stateful Fault Tolerance
+
+State stores in Kafka Streams are either persistent or in-memory. Both types are backed by changelog topics for durability. When a Kafka Streams application is starting up, it detects a stateful node, and if it determines that data is missing, it will restore from the changelog topic. In-memory stores don't retain records across restarts, so they need to fully restore from the changelog topic after restarts. In contrast, persistent state stores may need little to no restoration.
+
+![Stateful Fault Tolerance](assets/images/22.png)
+
+## Compaction
+
+Changelog topics use compaction, whereby the oldest records for each key are deleted, safely leaving the most recent records. This means that your changelog topics won't endlessly grow in size.
+
+## Stateful Fault Tolerance
+
+A full restore of stateful operations can take time. For this reason, Kafka Streams offers stand-by tasks. When you set **num.standby.replicas** to be greater than the default setting of zero, Kafka Streams designates another application instance as a standby. The standby instance keeps a mirrored store in sync with the original by reading from the changelog. When the primary instance goes down, the standby takes over immediately.
+
+![Stateful Fault Tolerance 1](assets/images/23.png)
+
+# Interactive Queries
+
+- Stateful operations in Kafka Streams, which represent the present state of an event stream, include **aggregate, reduce**, and even KTable, since KTable uses an update stream
+
+- With event streams, a typical pattern is reporting—something like a dashboard application. You can do analytics over the longer term, but you also want to get a window into what's happening at the moment, especially with aggregations and counts. This will let you do alerting, for example.
+
+- Reporting usually requires the streaming system to write out its contents to an external database, where it is then queried by a UI layer for live use.
+
+## Introducing Interactive Queries
+
+Kafka Streams, however, enables you to directly query the existing state of a stateful operation or a table, without the need of a SQL layer. You do this using interactive queries. They are live, you can see them as they happen, and you don't need to write their intermediate results to an external database. Interactive queries provide a materialized view of your operations in real time, simplifying your architecture.
+
+## Enabling Interactive Queries
+
+KTables and aggregations are the eligible targets for Interactive Queries. To enable them, you name the state store via a **Materialized** object or use the **Stores** factory class; the **Stores** class has several methods that you can use to create a state store. (Learn more in the Hands On: Aggregations and Hands On: Processor API exercises.) You also need to provide the serving layer, usually a REST API, by setting the **application.server** configuration, specifying the host and port. Note that each instance shares metadata with all of the other applications that have the same application ID.
